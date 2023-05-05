@@ -242,6 +242,8 @@ if(NOT ARIBCC_NO_RENDERER)
         src/renderer/renderer_impl.hpp
         src/renderer/text_renderer.cpp
         src/renderer/text_renderer.hpp
+        $<$<OR:$<BOOL:${ARIBCC_USE_FREETYPE}>,$<BOOL:${ARIBCC_USE_DIRECTWRITE}>>:src/renderer/open_type_gsub.cpp>
+        $<$<OR:$<BOOL:${ARIBCC_USE_FREETYPE}>,$<BOOL:${ARIBCC_USE_DIRECTWRITE}>>:src/renderer/open_type_gsub.hpp>
         $<$<BOOL:${ARIBCC_USE_CORETEXT}>:src/renderer/text_renderer_coretext.cpp>
         $<$<BOOL:${ARIBCC_USE_CORETEXT}>:src/renderer/text_renderer_coretext.hpp>
         $<$<BOOL:${ARIBCC_USE_DIRECTWRITE}>:src/renderer/text_renderer_directwrite.cpp>
