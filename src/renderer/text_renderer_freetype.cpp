@@ -28,6 +28,7 @@
 #include FT_STROKER_H
 #include FT_SFNT_NAMES_H
 #include FT_TRUETYPE_IDS_H
+#include FT_TRUETYPE_TABLES_H
 
 namespace aribcaption {
 
@@ -79,6 +80,363 @@ auto TextRendererFreetype::BeginDraw(Bitmap& target_bmp) -> TextRenderContext {
 void TextRendererFreetype::EndDraw(TextRenderContext& context) {
     (void)context;
     // No-op
+}
+
+constexpr FT_Tag kOpenTypeFeatureHalfWidth = FT_MAKE_TAG('h', 'w', 'i', 'd');
+constexpr FT_Tag kOpenTypeScriptHiraganaKatakana = FT_MAKE_TAG('k', 'a', 'n', 'a');
+constexpr FT_Tag kOpenTypeLangSysJapanese = FT_MAKE_TAG('J', 'A', 'N', ' ');
+
+static uint16_t GetUint16(std::vector<uint8_t>& data, size_t offset) {
+    return static_cast<uint16_t>((static_cast<uint16_t>(data[offset]) << 8) | static_cast<uint16_t>(data[offset + 1]));
+}
+
+static uint32_t GetUint32(std::vector<uint8_t>& data, size_t offset) {
+    return static_cast<uint32_t>(
+        (static_cast<uint32_t>(data[offset]) << 24) | (static_cast<uint32_t>(data[offset + 1]) << 16) |
+        (static_cast<uint32_t>(data[offset + 2]) << 8) | static_cast<uint32_t>(data[offset + 3]));
+}
+
+static size_t GetOffset16(std::vector<uint8_t>& data, size_t offset) {
+    return static_cast<size_t>(GetUint16(data, offset));
+}
+
+static size_t GetOffset32(std::vector<uint8_t>& data, size_t offset) {
+    return static_cast<size_t>(GetUint32(data, offset));
+}
+
+static int16_t GetInt16(std::vector<uint8_t>& data, size_t offset) {
+    return static_cast<int16_t>(GetUint16(data, offset));
+}
+
+static FT_Tag GetTag(std::vector<uint8_t>& data, size_t offset) {
+    return FT_MAKE_TAG(data[offset], data[offset + 1], data[offset + 2], data[offset + 3]);
+}
+
+static auto ReadCoverageTable(std::vector<uint8_t>& gsub, size_t offset) -> std::optional<std::vector<uint16_t>> {
+    if (gsub.size() < offset + 2) {
+        return std::nullopt;
+    }
+    uint16_t coverage_format = GetUint16(gsub, offset);
+    if (coverage_format == 1) {
+        // Coverage Format 1:
+        // uint16       coverageFormat
+        // uint16       glyphCount
+        // uint16       glyphArray[glyphCount]
+        if (gsub.size() < offset + 4) {
+            return std::nullopt;
+        }
+        std::vector<uint16_t> coverage{};
+        size_t glyph_count = GetUint16(gsub, offset + 2);
+        size_t glyph_array_offset = offset + 4;
+        for (size_t coverage_index = 0; coverage_index < glyph_count; coverage_index++) {
+            if (gsub.size() < glyph_array_offset + coverage_index * 2 + 2) {
+                return std::nullopt;
+            }
+            uint16_t glyph_id = GetUint16(gsub, glyph_array_offset + coverage_index * 2);
+            coverage.push_back(glyph_id);
+        }
+        return std::make_optional(std::move(coverage));
+    } else if (coverage_format == 2) {
+        // Coverage Format 2:
+        // uint16       coverageFormat
+        // uint16       rangeCount
+        // RangeRecord  rangeRecords[rangeCount]
+        //
+        // RangeRecord:
+        // uint16       startGlyphID
+        // uint16       endGlyphID
+        // uint16       startCoverageIndex
+        if (gsub.size() < offset + 4) {
+            return std::nullopt;
+        }
+        std::vector<uint16_t> coverage{};
+        size_t range_count = GetUint16(gsub, offset + 2);
+        size_t range_records_offset = offset + 4;
+        uint32_t coverage_index = 0;
+        for (size_t range_index = 0; range_index < range_count; range_index++) {
+            constexpr size_t kRangeRecordSize = 6;
+            if (gsub.size() < range_records_offset + range_index * kRangeRecordSize + kRangeRecordSize) {
+                return std::nullopt;
+            }
+            uint16_t start_glyph_id = GetUint16(gsub, range_records_offset + range_index * kRangeRecordSize);
+            uint16_t end_glyph_id = GetUint16(gsub, range_records_offset + range_index * kRangeRecordSize + 2);
+            uint16_t start_coverage_index = GetUint16(gsub, range_records_offset + range_index * kRangeRecordSize + 4);
+            if (start_glyph_id > end_glyph_id || start_coverage_index != coverage_index) {
+                return std::nullopt;
+            }
+            coverage_index += end_glyph_id - start_glyph_id;
+            coverage_index += 1;
+            for (uint16_t glyph_id = start_glyph_id; glyph_id <= end_glyph_id; glyph_id++) {
+                coverage.push_back(glyph_id);
+            }
+        }
+        return std::make_optional(std::move(coverage));
+    }
+    return std::nullopt;
+}
+
+static auto ReadScriptFeatureIndices(std::vector<uint8_t>& gsub,
+                                     size_t script_list_offset,
+                                     FT_Tag required_script_tag,
+                                     FT_Tag required_lang_sys_tag) -> std::vector<uint16_t> {
+    std::vector<uint16_t> feature_indices{};
+    if (gsub.size() < script_list_offset + 2) {
+        return {};
+    }
+    size_t script_count = GetUint16(gsub, script_list_offset);
+    size_t script_records_offset = script_list_offset + 2;
+    // ScriptList table:
+    // uint16           scriptCount
+    // ScriptRecord     scriptRecords[scriptCount]
+    //
+    // ScriptRecord:
+    // Tag              scriptTag
+    // Offset16         scriptOffset
+    //
+    // Script table:
+    // Offset16         defaultLangSysOffset
+    // uint16           langSysCount
+    // LangSysRecord    langSysRecords[langSysCount]
+    //
+    // LangSysRecord:
+    // Tag              langSysTag
+    // Offset16         langSysOffset
+    //
+    // LangSys table:
+    // Offset16 lookupOrderOffset
+    // uint16   requiredFeatureIndex
+    // uint16   featureIndexCount
+    // uint16   featureIndices[featureIndexCount]
+    for (size_t script_index = 0; script_index < script_count; script_index++) {
+        constexpr size_t kScriptRecordSize = 6;
+        size_t script_record_offset = script_records_offset + script_index * kScriptRecordSize;
+        if (gsub.size() < script_record_offset + kScriptRecordSize) {
+            return {};
+        }
+        FT_Tag script_tag = GetTag(gsub, script_record_offset);
+        if (script_tag != required_script_tag) {
+            continue;
+        }
+        size_t script_offset = script_list_offset + GetOffset16(gsub, script_record_offset + 4);
+        if (gsub.size() < script_offset + 4) {
+            return {};
+        }
+        size_t default_lang_sys_offset = script_offset + GetOffset16(gsub, script_offset);
+        size_t lang_sys_count = GetUint16(gsub, script_offset + 2);
+        size_t lang_sys_offset = default_lang_sys_offset;
+        size_t lang_sys_records_offset = script_offset + 4;
+        for (size_t lang_sys_index = 0; lang_sys_index < lang_sys_count; lang_sys_index++) {
+            constexpr size_t kLangSysRecordSize = 6;
+            size_t lang_sys_record_offset = lang_sys_records_offset + lang_sys_index * kLangSysRecordSize;
+            if (gsub.size() < lang_sys_record_offset + kLangSysRecordSize) {
+                return {};
+            }
+            FT_Tag lang_sys_tag = GetTag(gsub, lang_sys_record_offset);
+            if (lang_sys_tag == required_lang_sys_tag) {
+                lang_sys_offset = GetUint16(gsub, lang_sys_record_offset + 4);
+                break;
+            }
+        }
+        if (lang_sys_offset == script_offset) {
+            continue;
+        }
+        if (gsub.size() < lang_sys_offset + 6) {
+            return {};
+        }
+        uint16_t required_feature_index = GetUint16(gsub, lang_sys_offset + 2);
+        if (required_feature_index != 0xffff) {
+            feature_indices.push_back(required_feature_index);
+        }
+        uint16_t feature_index_count = GetUint16(gsub, lang_sys_offset + 4);
+        size_t feature_indices_offset = lang_sys_offset + 6;
+        for (size_t i = 0; i < feature_index_count; i++) {
+            if (gsub.size() < feature_indices_offset + i * 2 + 2) {
+                return {};
+            }
+            uint16_t feature_index = GetUint16(gsub, feature_indices_offset + i * 2);
+            feature_indices.push_back(feature_index);
+        }
+        break;
+    }
+    return feature_indices;
+}
+
+static auto LoadGSUBTable(FT_Face face, FT_Tag required_feature_tag, FT_Tag script_tag, FT_Tag lang_sys_tag)
+    -> std::unordered_map<FT_UInt, FT_UInt> {
+    std::unordered_map<FT_UInt, FT_UInt> half_width_subst_map{};
+    FT_ULong gsub_size = 0;
+    if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('G', 'S', 'U', 'B'), 0, nullptr, &gsub_size)) {
+        return {};
+    }
+    std::vector<uint8_t> gsub(static_cast<size_t>(gsub_size));
+    if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('G', 'S', 'U', 'B'), 0, reinterpret_cast<FT_Byte*>(gsub.data()),
+                           &gsub_size)) {
+        return {};
+    }
+    // GSUB Header:
+    // uint16           majorVersion
+    // uint16           minorVersion
+    // Offset16         scriptListOffset
+    // Offset16         featureListOffset
+    // Offset16         lookupListOffset
+    // Offset16         featureVariationsOffset if majorVersion = 1 and minorVersion = 1
+    if (gsub_size - 2 < 8) {
+        return {};
+    }
+    size_t script_list_offset = GetOffset16(gsub, 4);
+    auto feature_indices = ReadScriptFeatureIndices(gsub, script_list_offset, script_tag, lang_sys_tag);
+    // FeatureList table:
+    // uint16           featureCount
+    // FeatureRecord    featureRecords[featureCount]
+    //
+    // FeatureRecord:
+    // Tag              featureTag
+    // Offset16         featureOffset
+    //
+    // LookupList table:
+    // uint16           lookupCount
+    // Offset16         lookupOffsets[lookupCount]
+    size_t feature_list_offset = GetOffset16(gsub, 6);
+    size_t lookup_list_offset = GetOffset16(gsub, 8);
+    uint16_t lookup_count = GetUint16(gsub, lookup_list_offset);
+    size_t lookup_offsets_offset = lookup_list_offset + 2;
+    if (gsub_size < lookup_list_offset + 2 || gsub_size < feature_list_offset + 2) {
+        return {};
+    }
+    uint16_t feature_count = GetUint16(gsub, feature_list_offset);
+    size_t feature_records_offset = feature_list_offset + 2;
+    for (auto feature_index : feature_indices) {
+        constexpr size_t kFeatureRecordSize = 6;
+        size_t feature_record_offset = feature_records_offset + feature_index * kFeatureRecordSize;
+        if (feature_index >= feature_count || gsub_size < feature_record_offset + kFeatureRecordSize) {
+            return {};
+        }
+        FT_Tag feature_tag = GetTag(gsub, feature_record_offset);
+        if (feature_tag != required_feature_tag) {
+            continue;
+        }
+        size_t feature_offset = feature_list_offset + GetOffset16(gsub, feature_record_offset + 4);
+        // Feature table:
+        // Offset16     featureParamsOffset
+        // uint16       lookupIndexCount
+        // uint16       lookupListIndices[lookupIndexCount]
+        if (gsub_size < feature_offset + 4) {
+            return {};
+        }
+        size_t feature_params_offset = GetOffset16(gsub, feature_offset);
+        if (feature_params_offset != 0) {
+            // FeatureParams tables are defined only for 'cv01'-'cv99', 'size', and 'ss01'-'ss20'.
+            return {};
+        }
+        uint16_t lookup_index_count = GetUint16(gsub, feature_offset + 2);
+        size_t lookup_list_indices_offset = feature_offset + 4;
+        for (size_t lookup_index = 0; lookup_index < lookup_index_count; lookup_index++) {
+            if (gsub_size < lookup_list_indices_offset + lookup_index * 2 + 2) {
+                return {};
+            }
+            size_t lookup_list_index = GetUint16(gsub, lookup_list_indices_offset + lookup_index * 2);
+            if (lookup_list_index >= feature_count || gsub_size < lookup_offsets_offset + lookup_list_index * 2 + 2) {
+                return {};
+            }
+            size_t lookup_offset =
+                lookup_list_offset + GetOffset16(gsub, lookup_offsets_offset + lookup_list_index * 2);
+            if (gsub_size < lookup_offset + 6) {
+                return {};
+            }
+            // Lookup table:
+            // uint16           lookupType
+            // uint16           lookupFlag
+            // uint16           subTableCount
+            // Offset16         subtableOffsets[subTableCount]
+            // uint16           markFilteringSet if lookupFlag & USE_MARK_FILTERING_SET
+            uint16_t lookup_type = GetUint16(gsub, lookup_offset);
+            uint16_t lookup_flag = GetUint16(gsub, lookup_offset + 2);
+            size_t subtable_count = GetUint16(gsub, lookup_offset + 4);
+            bool is_extension = lookup_type == 7;
+            size_t subtable_offsets_offset = lookup_offset + 6;
+            for (size_t subtable_index = 0; subtable_index < subtable_count; subtable_index++) {
+                if (gsub_size < subtable_offsets_offset + subtable_index * 2 + 2) {
+                    return {};
+                }
+                size_t subtable_offset =
+                    lookup_offset + GetOffset16(gsub, subtable_offsets_offset + subtable_index * 2);
+                if (gsub_size < subtable_offset + 2) {
+                    return {};
+                }
+                uint16_t subst_format = GetUint16(gsub, subtable_offset);
+                if (is_extension) {
+                    // Extension Substitution Subtable Format 1:
+                    // uint16       substFormat
+                    // uint16       extensionLookupType
+                    // Offset32     extensionOffset
+                    if (subst_format != 1) {
+                        continue;
+                    }
+                    if (gsub_size < subtable_offset + 8) {
+                        return {};
+                    }
+                    uint16_t extension_lookup_type = GetUint16(gsub, subtable_offset + 2);
+                    size_t extension_offset = GetOffset32(gsub, subtable_offset + 4);
+                    lookup_type = extension_lookup_type;
+                    subtable_offset += extension_offset;
+                    if (gsub_size < subtable_offset + 2) {
+                        return {};
+                    }
+                    subst_format = GetUint16(gsub, subtable_offset);
+                }
+                if (lookup_type == 1) {
+                    // LookupType 1: Single Substitution Subtable
+                    if (gsub_size < subtable_offset + 4) {
+                        return {};
+                    }
+                    size_t coverage_offset = subtable_offset + GetOffset16(gsub, subtable_offset + 2);
+                    auto coverage = ReadCoverageTable(gsub, coverage_offset);
+                    if (!coverage) {
+                        return {};
+                    }
+                    if (subst_format == 1) {
+                        // Single Substitution Format 1:
+                        // uint16   substFormat
+                        // Offset16 coverageOffset
+                        // int16    deltaGlyphID
+                        if (gsub_size < subtable_offset + 6) {
+                            return {};
+                        }
+                        int16_t delta_glyph_id = GetInt16(gsub, subtable_offset + 4);
+                        for (auto&& glyph_id : coverage.value()) {
+                            half_width_subst_map[static_cast<FT_UInt>(glyph_id)] =
+                                static_cast<FT_UInt>(static_cast<uint16_t>(glyph_id + delta_glyph_id));
+                        }
+                    } else if (subst_format == 2) {
+                        // Single Substitution Format 2:
+                        // uint16   substFormat
+                        // Offset16 coverageOffset
+                        // uint16   glyphCount
+                        // uint16   substituteGlyphIDs[glyphCount]
+                        uint16_t glyph_count = GetUint16(gsub, subtable_offset + 4);
+                        if (gsub_size < subtable_offset + 6) {
+                            return {};
+                        }
+                        size_t substitute_glyph_ids_offset = subtable_offset + 6;
+                        for (size_t coverage_index = 0; coverage_index < glyph_count; coverage_index++) {
+                            if (gsub_size < substitute_glyph_ids_offset + coverage_index * 2 + 2) {
+                                return {};
+                            }
+                            uint16_t substitute_glyph_id =
+                                GetUint16(gsub, substitute_glyph_ids_offset + coverage_index * 2);
+                            if (coverage->size() <= coverage_index) {
+                                return {};
+                            }
+                            half_width_subst_map[static_cast<FT_UInt>(coverage.value()[coverage_index])] =
+                                static_cast<FT_UInt>(substitute_glyph_id);
+                        }
+                    }
+                }
+            }
+        }
+        break;
+    }
+    return half_width_subst_map;
 }
 
 auto TextRendererFreetype::DrawChar(TextRenderContext& render_ctx, int target_x, int target_y,
@@ -144,6 +502,30 @@ auto TextRendererFreetype::DrawChar(TextRenderContext& render_ctx, int target_x,
                 log_->e("Freetype: Got glyph_index == 0 for U+%04X in fallback font", ucs4);
                 return TextRenderStatus::kCodePointNotFound;
             }
+        }
+    }
+
+    if (char_width == char_height / 2) {
+        auto& subst_map = face == main_face_ ? main_half_width_subst_map_ : std::nullopt;
+        if (face == main_face_) {
+            if (!main_half_width_subst_map_) {
+                main_half_width_subst_map_ = LoadGSUBTable(face, kOpenTypeFeatureHalfWidth,
+                                                           kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
+                subst_map = main_half_width_subst_map_;
+            }
+        } else if (fallback_face_ && face == fallback_face_) {
+            if (!fallback_half_width_subst_map_) {
+                fallback_half_width_subst_map_ = LoadGSUBTable(
+                    face, kOpenTypeFeatureHalfWidth, kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
+            }
+            subst_map = fallback_half_width_subst_map_;
+        }
+        if (subst_map) {
+            auto subst = subst_map->find(glyph_index);
+            if (subst != subst_map->end()) {
+                glyph_index = subst->second;
+            }
+            char_width = char_height;
         }
     }
 
