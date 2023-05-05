@@ -463,6 +463,31 @@ auto TextRendererDirectWrite::DrawChar(TextRenderContext& render_ctx, int target
         return TextRenderStatus::kOtherError;
     }
 
+    // Check if the font has a half width glyph for this character.
+    if (char_width == char_height / 2) {
+        ComPtr<IDWriteTypography> typography;
+        DWRITE_TEXT_METRICS full_width_text_metrics = metrics;
+        DWRITE_FONT_FEATURE feature = {DWRITE_FONT_FEATURE_TAG_HALF_WIDTH, 1};
+        if (SUCCEEDED(dwrite_factory_->CreateTypography(&typography)) &&
+            SUCCEEDED(typography->AddFontFeature(feature)) &&
+            SUCCEEDED(text_layout->SetTypography(typography.Get(), DWRITE_TEXT_RANGE{0, 1}))) {
+            hr = text_layout->GetMetrics(&metrics);
+            if (FAILED(hr)) {
+                log_->e("TextRendererDirectWrite: GetMetrics() failed");
+                return TextRenderStatus::kOtherError;
+            }
+            // Avoid scaling because it has a half width glyph.
+            if (full_width_text_metrics.width / 2 == metrics.width) {
+                char_width = char_height;
+                horizontal_scale = 1.0f;
+            } else {
+                if (SUCCEEDED(dwrite_factory_->CreateTypography(&typography))) {
+                    text_layout->SetTypography(typography.Get(), DWRITE_TEXT_RANGE{0, 1});
+                }
+            }
+        }
+    }
+
     // Calculate charbox size
     int charbox_width = static_cast<int>(ceilf((metrics.width + (float)margin_x * 2) * horizontal_scale));
     int charbox_height = static_cast<int>(ceilf(metrics.height)) + margin_y * 2;
