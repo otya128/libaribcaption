@@ -233,7 +233,7 @@ static auto ReadScriptFeatureIndices(std::vector<uint8_t>& gsub,
             }
             FT_Tag lang_sys_tag = GetTag(gsub, lang_sys_record_offset);
             if (lang_sys_tag == required_lang_sys_tag) {
-                lang_sys_offset = GetUint16(gsub, lang_sys_record_offset + 4);
+                lang_sys_offset = script_offset + GetUint16(gsub, lang_sys_record_offset + 4);
                 break;
             }
         }
@@ -506,26 +506,24 @@ auto TextRendererFreetype::DrawChar(TextRenderContext& render_ctx, int target_x,
     }
 
     if (char_width == char_height / 2) {
-        auto& subst_map = face == main_face_ ? main_half_width_subst_map_ : std::nullopt;
         if (face == main_face_) {
             if (!main_half_width_subst_map_) {
                 main_half_width_subst_map_ = LoadGSUBTable(face, kOpenTypeFeatureHalfWidth,
                                                            kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
-                subst_map = main_half_width_subst_map_;
             }
         } else if (fallback_face_ && face == fallback_face_) {
             if (!fallback_half_width_subst_map_) {
                 fallback_half_width_subst_map_ = LoadGSUBTable(
                     face, kOpenTypeFeatureHalfWidth, kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
             }
-            subst_map = fallback_half_width_subst_map_;
         }
+        auto& subst_map = face == main_face_ ? main_half_width_subst_map_ : fallback_half_width_subst_map_;
         if (subst_map) {
             auto subst = subst_map->find(glyph_index);
             if (subst != subst_map->end()) {
                 glyph_index = subst->second;
+                char_width = char_height;
             }
-            char_width = char_height;
         }
     }
 
