@@ -18,13 +18,19 @@
 
 #ifndef ARIBCAPTION_OPEN_TYPE_GSUB
 #define ARIBCAPTION_OPEN_TYPE_GSUB
-#include <ft2build.h>
+#include <cstdint>
 #include <unordered_map>
-#include FT_TRUETYPE_TABLES_H
+#include <vector>
+inline constexpr uint32_t FourCC(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
+    return (static_cast<uint32_t>(a) << 24) | (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(c) << 8) |
+           (static_cast<uint32_t>(d) << 0);
+}
 
-inline constexpr FT_Tag kOpenTypeFeatureHalfWidth = FT_MAKE_TAG('h', 'w', 'i', 'd');
-inline constexpr FT_Tag kOpenTypeScriptHiraganaKatakana = FT_MAKE_TAG('k', 'a', 'n', 'a');
-inline constexpr FT_Tag kOpenTypeLangSysJapanese = FT_MAKE_TAG('J', 'A', 'N', ' ');
-auto LoadSingleGSUBTable(FT_Face face, FT_Tag required_feature_tag, FT_Tag script_tag, FT_Tag lang_sys_tag)
-    -> std::unordered_map<FT_UInt, FT_UInt>;
+inline constexpr uint32_t kOpenTypeFeatureHalfWidth = FourCC('h', 'w', 'i', 'd');
+inline constexpr uint32_t kOpenTypeScriptHiraganaKatakana = FourCC('k', 'a', 'n', 'a');
+inline constexpr uint32_t kOpenTypeLangSysJapanese = FourCC('J', 'A', 'N', ' ');
+auto LoadSingleGSUBTable(std::vector<uint8_t>& gsub,
+                         uint32_t required_feature_tag,
+                         uint32_t script_tag,
+                         uint32_t lang_sys_tag) -> std::unordered_map<uint32_t, uint32_t>;
 #endif

@@ -69,8 +69,8 @@ private:
     ScopedHolder<FT_Face> fallback_face_;
     std::vector<uint8_t> main_face_data_;
     std::vector<uint8_t> fallback_face_data_;
-    std::optional<std::unordered_map<FT_UInt, FT_UInt>> main_half_width_subst_map_;
-    std::optional<std::unordered_map<FT_UInt, FT_UInt>> fallback_half_width_subst_map_;
+    std::optional<std::unordered_map<uint32_t, uint32_t>> main_half_width_subst_map_;
+    std::optional<std::unordered_map<uint32_t, uint32_t>> fallback_half_width_subst_map_;
     size_t main_face_index_ = 0;
 };
 

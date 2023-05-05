@@ -29,6 +29,7 @@
 #include FT_STROKER_H
 #include FT_SFNT_NAMES_H
 #include FT_TRUETYPE_IDS_H
+#include FT_TRUETYPE_TABLES_H
 
 namespace aribcaption {
 
@@ -80,6 +81,19 @@ auto TextRendererFreetype::BeginDraw(Bitmap& target_bmp) -> TextRenderContext {
 void TextRendererFreetype::EndDraw(TextRenderContext& context) {
     (void)context;
     // No-op
+}
+
+static auto LoadSFNTTable(FT_Face face, FT_Tag tag) -> std::vector<uint8_t> {
+    std::vector<uint8_t> gsub;
+    FT_ULong gsub_size = 0;
+    if (FT_Load_Sfnt_Table(face, tag, 0, nullptr, &gsub_size)) {
+        return {};
+    }
+    std::vector<uint8_t> gsub(static_cast<size_t>(gsub_size));
+    if (FT_Load_Sfnt_Table(face, tag, 0, reinterpret_cast<FT_Byte*>(gsub.data()), &gsub_size)) {
+        return {};
+    }
+    return gsub;
 }
 
 auto TextRendererFreetype::DrawChar(TextRenderContext& render_ctx, int target_x, int target_y,
@@ -151,13 +165,15 @@ auto TextRendererFreetype::DrawChar(TextRenderContext& render_ctx, int target_x,
     if (char_width == char_height / 2) {
         if (face == main_face_) {
             if (!main_half_width_subst_map_) {
-                main_half_width_subst_map_ = LoadSingleGSUBTable(
-                    face, kOpenTypeFeatureHalfWidth, kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
+                main_half_width_subst_map_ =
+                    LoadSingleGSUBTable(LoadSFNTTable(face, FT_MAKE_TAG('G', 'S', 'U', 'B')), kOpenTypeFeatureHalfWidth,
+                                        kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
             }
         } else if (fallback_face_ && face == fallback_face_) {
             if (!fallback_half_width_subst_map_) {
-                fallback_half_width_subst_map_ = LoadSingleGSUBTable(
-                    face, kOpenTypeFeatureHalfWidth, kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
+                fallback_half_width_subst_map_ =
+                    LoadSingleGSUBTable(LoadSFNTTable(face, FT_MAKE_TAG('G', 'S', 'U', 'B')), kOpenTypeFeatureHalfWidth,
+                                        kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
             }
         }
         auto& subst_map = face == main_face_ ? main_half_width_subst_map_ : fallback_half_width_subst_map_;

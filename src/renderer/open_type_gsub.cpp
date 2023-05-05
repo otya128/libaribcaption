@@ -43,8 +43,8 @@ static int16_t GetInt16(std::vector<uint8_t>& data, size_t offset) {
     return static_cast<int16_t>(GetUint16(data, offset));
 }
 
-static FT_Tag GetTag(std::vector<uint8_t>& data, size_t offset) {
-    return FT_MAKE_TAG(data[offset], data[offset + 1], data[offset + 2], data[offset + 3]);
+static uint32_t GetTag(std::vector<uint8_t>& data, size_t offset) {
+    return FourCC(data[offset], data[offset + 1], data[offset + 2], data[offset + 3]);
 }
 
 static auto ReadCoverageTable(std::vector<uint8_t>& gsub, size_t offset) -> std::optional<std::vector<uint16_t>> {
@@ -112,8 +112,8 @@ static auto ReadCoverageTable(std::vector<uint8_t>& gsub, size_t offset) -> std:
 
 static auto ReadScriptFeatureIndices(std::vector<uint8_t>& gsub,
                                      size_t script_list_offset,
-                                     FT_Tag required_script_tag,
-                                     FT_Tag required_lang_sys_tag) -> std::vector<uint16_t> {
+                                     uint32_t required_script_tag,
+                                     uint32_t required_lang_sys_tag) -> std::vector<uint16_t> {
     std::vector<uint16_t> feature_indices{};
     if (gsub.size() < script_list_offset + 2) {
         return {};
@@ -148,7 +148,7 @@ static auto ReadScriptFeatureIndices(std::vector<uint8_t>& gsub,
         if (gsub.size() < script_record_offset + kScriptRecordSize) {
             return {};
         }
-        FT_Tag script_tag = GetTag(gsub, script_record_offset);
+        uint32_t script_tag = GetTag(gsub, script_record_offset);
         if (script_tag != required_script_tag) {
             continue;
         }
@@ -166,7 +166,7 @@ static auto ReadScriptFeatureIndices(std::vector<uint8_t>& gsub,
             if (gsub.size() < lang_sys_record_offset + kLangSysRecordSize) {
                 return {};
             }
-            FT_Tag lang_sys_tag = GetTag(gsub, lang_sys_record_offset);
+            uint32_t lang_sys_tag = GetTag(gsub, lang_sys_record_offset);
             if (lang_sys_tag == required_lang_sys_tag) {
                 lang_sys_offset = script_offset + GetUint16(gsub, lang_sys_record_offset + 4);
                 break;
@@ -196,18 +196,12 @@ static auto ReadScriptFeatureIndices(std::vector<uint8_t>& gsub,
     return feature_indices;
 }
 
-auto LoadSingleGSUBTable(FT_Face face, FT_Tag required_feature_tag, FT_Tag script_tag, FT_Tag lang_sys_tag)
-    -> std::unordered_map<FT_UInt, FT_UInt> {
-    std::unordered_map<FT_UInt, FT_UInt> half_width_subst_map{};
-    FT_ULong gsub_size = 0;
-    if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('G', 'S', 'U', 'B'), 0, nullptr, &gsub_size)) {
-        return {};
-    }
-    std::vector<uint8_t> gsub(static_cast<size_t>(gsub_size));
-    if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('G', 'S', 'U', 'B'), 0, reinterpret_cast<FT_Byte*>(gsub.data()),
-                           &gsub_size)) {
-        return {};
-    }
+auto LoadSingleGSUBTable(std::vector<uint8_t>& gsub,
+                         uint32_t required_feature_tag,
+                         uint32_t script_tag,
+                         uint32_t lang_sys_tag) -> std::unordered_map<uint32_t, uint32_t> {
+    std::unordered_map<uint32_t, uint32_t> half_width_subst_map{};
+    size_t gsub_size = gsub.size();
     // GSUB Header:
     // uint16           majorVersion
     // uint16           minorVersion
@@ -246,7 +240,7 @@ auto LoadSingleGSUBTable(FT_Face face, FT_Tag required_feature_tag, FT_Tag scrip
         if (feature_index >= feature_count || gsub_size < feature_record_offset + kFeatureRecordSize) {
             return {};
         }
-        FT_Tag feature_tag = GetTag(gsub, feature_record_offset);
+        uint32_t feature_tag = GetTag(gsub, feature_record_offset);
         if (feature_tag != required_feature_tag) {
             continue;
         }
@@ -339,8 +333,8 @@ auto LoadSingleGSUBTable(FT_Face face, FT_Tag required_feature_tag, FT_Tag scrip
                         }
                         int16_t delta_glyph_id = GetInt16(gsub, subtable_offset + 4);
                         for (auto&& glyph_id : coverage.value()) {
-                            half_width_subst_map[static_cast<FT_UInt>(glyph_id)] =
-                                static_cast<FT_UInt>(static_cast<uint16_t>(glyph_id + delta_glyph_id));
+                            half_width_subst_map[static_cast<uint32_t>(glyph_id)] =
+                                static_cast<uint32_t>(static_cast<uint16_t>(glyph_id + delta_glyph_id));
                         }
                     } else if (subst_format == 2) {
                         // Single Substitution Format 2:
@@ -362,8 +356,8 @@ auto LoadSingleGSUBTable(FT_Face face, FT_Tag required_feature_tag, FT_Tag scrip
                             if (coverage->size() <= coverage_index) {
                                 return {};
                             }
-                            half_width_subst_map[static_cast<FT_UInt>(coverage.value()[coverage_index])] =
-                                static_cast<FT_UInt>(substitute_glyph_id);
+                            half_width_subst_map[static_cast<uint32_t>(coverage.value()[coverage_index])] =
+                                static_cast<uint32_t>(substitute_glyph_id);
                         }
                     }
                 }
