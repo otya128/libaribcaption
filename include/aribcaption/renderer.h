@@ -311,6 +311,13 @@ ARIBCC_API bool aribcc_renderer_set_language_specific_font_family(aribcc_rendere
                                                                   size_t family_count);
 
 /**
+ *
+ * @param decoder  @aribcc_decoder_t
+ * @param replace  bool
+ */
+ARIBCC_API void aribcc_renderer_set_replace_msz_halfwidth_glyph(aribcc_renderer_t* renderer, bool replace);
+
+/**
  * Set the renderer frame size in pixels, include margins. This function must be called before any render call.
  *
  * Usually rendered images will be inside this frame area, unless negative margin values are specified.

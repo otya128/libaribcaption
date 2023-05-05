@@ -246,6 +246,12 @@ public:
     ARIBCC_API bool SetLanguageSpecificFontFamily(uint32_t language_code, const std::vector<std::string>& font_family);
 
     /**
+     *
+     * @param replace bool
+     */
+    ARIBCC_API void SetReplaceMSZHalfWidthGlyph(bool replace);
+
+    /**
      * Set the renderer frame size in pixels, include margins. This function must be called before any @Render() call.
      *
      * Usually rendered images will be inside this frame area, unless negative margin values are specified.
