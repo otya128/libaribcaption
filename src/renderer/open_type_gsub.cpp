@@ -21,33 +21,33 @@
 #include <optional>
 #include <vector>
 
-static uint16_t GetUint16(std::vector<uint8_t>& data, size_t offset) {
+static uint16_t GetUint16(const std::vector<uint8_t>& data, size_t offset) {
     return static_cast<uint16_t>((static_cast<uint16_t>(data[offset]) << 8) | static_cast<uint16_t>(data[offset + 1]));
 }
 
-static uint32_t GetUint32(std::vector<uint8_t>& data, size_t offset) {
+static uint32_t GetUint32(const std::vector<uint8_t>& data, size_t offset) {
     return static_cast<uint32_t>(
         (static_cast<uint32_t>(data[offset]) << 24) | (static_cast<uint32_t>(data[offset + 1]) << 16) |
         (static_cast<uint32_t>(data[offset + 2]) << 8) | static_cast<uint32_t>(data[offset + 3]));
 }
 
-static size_t GetOffset16(std::vector<uint8_t>& data, size_t offset) {
+static size_t GetOffset16(const std::vector<uint8_t>& data, size_t offset) {
     return static_cast<size_t>(GetUint16(data, offset));
 }
 
-static size_t GetOffset32(std::vector<uint8_t>& data, size_t offset) {
+static size_t GetOffset32(const std::vector<uint8_t>& data, size_t offset) {
     return static_cast<size_t>(GetUint32(data, offset));
 }
 
-static int16_t GetInt16(std::vector<uint8_t>& data, size_t offset) {
+static int16_t GetInt16(const std::vector<uint8_t>& data, size_t offset) {
     return static_cast<int16_t>(GetUint16(data, offset));
 }
 
-static uint32_t GetTag(std::vector<uint8_t>& data, size_t offset) {
+static uint32_t GetTag(const std::vector<uint8_t>& data, size_t offset) {
     return FourCC(data[offset], data[offset + 1], data[offset + 2], data[offset + 3]);
 }
 
-static auto ReadCoverageTable(std::vector<uint8_t>& gsub, size_t offset) -> std::optional<std::vector<uint16_t>> {
+static auto ReadCoverageTable(const std::vector<uint8_t>& gsub, size_t offset) -> std::optional<std::vector<uint16_t>> {
     if (gsub.size() < offset + 2) {
         return std::nullopt;
     }
@@ -110,7 +110,7 @@ static auto ReadCoverageTable(std::vector<uint8_t>& gsub, size_t offset) -> std:
     return std::nullopt;
 }
 
-static auto ReadScriptFeatureIndices(std::vector<uint8_t>& gsub,
+static auto ReadScriptFeatureIndices(const std::vector<uint8_t>& gsub,
                                      size_t script_list_offset,
                                      uint32_t required_script_tag,
                                      uint32_t required_lang_sys_tag) -> std::vector<uint16_t> {
@@ -196,7 +196,7 @@ static auto ReadScriptFeatureIndices(std::vector<uint8_t>& gsub,
     return feature_indices;
 }
 
-auto LoadSingleGSUBTable(std::vector<uint8_t>& gsub,
+auto LoadSingleGSUBTable(const std::vector<uint8_t>& gsub,
                          uint32_t required_feature_tag,
                          uint32_t script_tag,
                          uint32_t lang_sys_tag) -> std::unordered_map<uint32_t, uint32_t> {

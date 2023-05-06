@@ -29,7 +29,7 @@ inline constexpr uint32_t FourCC(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
 inline constexpr uint32_t kOpenTypeFeatureHalfWidth = FourCC('h', 'w', 'i', 'd');
 inline constexpr uint32_t kOpenTypeScriptHiraganaKatakana = FourCC('k', 'a', 'n', 'a');
 inline constexpr uint32_t kOpenTypeLangSysJapanese = FourCC('J', 'A', 'N', ' ');
-auto LoadSingleGSUBTable(std::vector<uint8_t>& gsub,
+auto LoadSingleGSUBTable(const std::vector<uint8_t>& gsub,
                          uint32_t required_feature_tag,
                          uint32_t script_tag,
                          uint32_t lang_sys_tag) -> std::unordered_map<uint32_t, uint32_t>;
