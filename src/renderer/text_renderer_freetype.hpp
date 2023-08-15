@@ -74,7 +74,7 @@ private:
     std::optional<std::unordered_map<uint32_t, uint32_t>> fallback_halfwidth_subst_map_;
     size_t main_face_index_ = 0;
 
-    bool replace_msz_halfwidth_glyph_ = false;
+    bool replace_msz_halfwidth_glyph_ = true;
 };
 
 }  // namespace aribcaption

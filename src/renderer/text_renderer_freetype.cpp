@@ -20,10 +20,12 @@
 #include <cstring>
 #include <cstdint>
 #include <cmath>
+#include <unordered_set>
 #include "base/floating_helper.hpp"
 #include "base/scoped_holder.hpp"
 #include "base/unicode_helper.hpp"
 #include "base/utf_helper.hpp"
+#include "decoder/b24_conv_tables.hpp"
 #include "renderer/alphablend.hpp"
 #include "renderer/canvas.hpp"
 #include "renderer/open_type_gsub.hpp"
@@ -99,6 +101,57 @@ static auto LoadSFNTTable(FT_Face face, FT_Tag tag) -> std::vector<uint8_t> {
         return {};
     }
     return gsub;
+}
+
+static void RemoveMalformedSubstMapEntries(FT_Face face,
+                                           std::unordered_map<uint32_t, uint32_t>& subst_map,
+                                           const uint32_t char_table[],
+                                           size_t size) {
+    std::unordered_set<FT_UInt> glyph_set;
+    bool failed = false;
+    for (size_t i = 0; i < size; i++) {
+        FT_UInt glyph_index = FT_Get_Char_Index(face, char_table[i]);
+        if (glyph_index == 0) {
+            failed = true;
+            break;
+        }
+        auto subst = subst_map.find(glyph_index);
+        if (subst == subst_map.end()) {
+            // Noto Sans/Source Han's GSUB table is partial and do not use in such cases.
+            failed = true;
+            break;
+        }
+        if (!glyph_set.insert(subst->second).second) {
+            // LINE Seed JP's GSUB table substitute all alphanumeric characters with * and do not use in such cases.
+            failed = true;
+            break;
+        }
+    }
+    if (failed) {
+        for (size_t i = 0; i < size; i++) {
+            FT_UInt glyph_index = FT_Get_Char_Index(face, char_table[i]);
+            if (glyph_index != 0) {
+                subst_map.erase(glyph_index);
+            }
+        }
+    }
+}
+
+inline constexpr uint32_t kKanaSymbolsTable_Fullwidth[] = {0x30fc, 0x3002, 0x300c, 0x300d, 0x3001, 0x30fb};
+
+static void RemoveMalformedSubstMapEntries(FT_Face face, std::unordered_map<uint32_t, uint32_t>& subst_map) {
+    RemoveMalformedSubstMapEntries(face, subst_map, kAlphanumericTable_Fullwidth,
+                                   std::size(kAlphanumericTable_Fullwidth));
+    RemoveMalformedSubstMapEntries(face, subst_map, kKatakanaTable,
+                                   std::size(kKatakanaTable) - std::size(kKanaSymbolsTable_Fullwidth));
+    RemoveMalformedSubstMapEntries(face, subst_map, kHiraganaTable,
+                                   std::size(kHiraganaTable) - std::size(kKanaSymbolsTable_Fullwidth));
+    RemoveMalformedSubstMapEntries(face, subst_map, kKanaSymbolsTable_Fullwidth,
+                                   std::size(kKanaSymbolsTable_Fullwidth));
+    RemoveMalformedSubstMapEntries(face, subst_map, kKanaSymbolsTable_Halfwidth,
+                                   std::size(kKanaSymbolsTable_Halfwidth));
+    RemoveMalformedSubstMapEntries(face, subst_map, kAlphanumericTable_Halfwidth,
+                                   std::size(kAlphanumericTable_Halfwidth));
 }
 
 auto TextRendererFreetype::DrawChar(TextRenderContext& render_ctx, int target_x, int target_y,
@@ -179,12 +232,14 @@ auto TextRendererFreetype::DrawChar(TextRenderContext& render_ctx, int target_x,
                 main_halfwidth_subst_map_ =
                     LoadSingleGSUBTable(LoadSFNTTable(face, FT_MAKE_TAG('G', 'S', 'U', 'B')), kOpenTypeFeatureHalfWidth,
                                         kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
+                RemoveMalformedSubstMapEntries(face, *main_halfwidth_subst_map_);
             }
         } else if (fallback_face_ && face == fallback_face_) {
             if (!fallback_halfwidth_subst_map_) {
                 fallback_halfwidth_subst_map_ =
                     LoadSingleGSUBTable(LoadSFNTTable(face, FT_MAKE_TAG('G', 'S', 'U', 'B')), kOpenTypeFeatureHalfWidth,
                                         kOpenTypeScriptHiraganaKatakana, kOpenTypeLangSysJapanese);
+                RemoveMalformedSubstMapEntries(face, *fallback_halfwidth_subst_map_);
             }
         }
         auto& subst_map = face == main_face_ ? main_halfwidth_subst_map_ : fallback_halfwidth_subst_map_;
